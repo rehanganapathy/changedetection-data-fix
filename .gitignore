@@ -1,0 +1,4 @@
+.env
+.demo/
+backups/*.tgz
+rescue-*

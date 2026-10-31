@@ -1,0 +1,269 @@
+From 8b6afe654140a5cad616b0395b34de4b5e69a23d Mon Sep 17 00:00:00 2001
+From: Rehan Ganapathy <rehang1710@outlook.com>
+Date: Sat, 31 Oct 2026 17:44:47 +0000
+Subject: [PATCH] Warn at startup and in the UI when the datastore is not on a
+ persistent volume
+
+The Docker image has no VOLUME for /datastore, so a container started without
+-v (or a compose/PaaS template missing the volumes: entry) writes every watch
+and setting into its writable layer. It survives 'docker restart' but is lost
+on the next re-create (image update, redeploy), which users see as watches and
+settings randomly disappearing.
+
+Detect this on Linux by checking /proc/self/mountinfo: if the datastore lives
+on the container's overlay root, log a CRITICAL message at startup and show a
+banner in the UI. Opt out with DISABLE_DATASTORE_STORAGE_CHECK=true.
+---
+ changedetectionio/__init__.py                 |   7 ++
+ changedetectionio/datastore_checks.py         | 102 ++++++++++++++++++
+ changedetectionio/flask_app.py                |   5 +
+ changedetectionio/templates/base.html         |   9 ++
+ .../unit/test_datastore_storage_check.py      |  73 +++++++++++++
+ 5 files changed, 196 insertions(+)
+ create mode 100644 changedetectionio/datastore_checks.py
+ create mode 100644 changedetectionio/tests/unit/test_datastore_storage_check.py
+
+diff --git a/changedetectionio/__init__.py b/changedetectionio/__init__.py
+index de8d0e77..b072625b 100644
+--- a/changedetectionio/__init__.py
++++ b/changedetectionio/__init__.py
+@@ -397,6 +397,13 @@ def main():
+                 f"Or use the -C parameter to create the directory.")
+             sys.exit(2)
+ 
++    # Warn loudly if the datastore would be thrown away with the container (no volume mounted)
++    from changedetectionio.datastore_checks import datastore_storage_warning
++    storage_warning = datastore_storage_warning(app_config['datastore_path'])
++    if storage_warning:
++        logger.critical(f"DATA LOSS RISK: {storage_warning}")
++    app_config['datastore_storage_warning'] = storage_warning
++
+     try:
+         datastore = store.ChangeDetectionStore(datastore_path=app_config['datastore_path'], version_tag=__version__, include_default_watches=include_default_watches)
+     except JSONDecodeError as e:
+diff --git a/changedetectionio/datastore_checks.py b/changedetectionio/datastore_checks.py
+new file mode 100644
+index 00000000..71f11329
+--- /dev/null
++++ b/changedetectionio/datastore_checks.py
+@@ -0,0 +1,102 @@
++"""
++Startup check: is the datastore on storage that survives the container being re-created?
++
++The official Docker image does not declare a VOLUME for /datastore. If the container is
++started without `-v something:/datastore` (or the volumes: entry is dropped from a compose
++file / a PaaS template), every watch, filter and setting is written into the container's
++writable layer. Everything works and even survives `docker restart`, but the next
++`docker compose up` with a new image, a Watchtower/Portainer/Coolify redeploy or a
++`docker rm` silently discards all of it. From the user's side this looks like
++"my watches and fields randomly disappear".
++
++This module detects that situation (Linux only, read-only, no side effects) so it can be
++logged loudly at startup and shown in the UI.
++
++Set DISABLE_DATASTORE_STORAGE_CHECK=true to silence it (for example in CI).
++"""
++import os
++import re
++
++from changedetectionio.strtobool import strtobool
++
++# Root filesystems that are thrown away together with the container
++EPHEMERAL_ROOT_FSTYPES = {"overlay", "overlayfs", "aufs", "fuse-overlayfs"}
++
++CONTAINER_MARKERS = ("/.dockerenv", "/run/.containerenv")
++
++
++_OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")
++
++
++def _unescape_mountinfo(path):
++    # /proc/self/mountinfo escapes space, tab, newline and backslash as octal (\040 etc.)
++    # Only decode those, so non-ASCII paths are left intact.
++    return _OCTAL_ESCAPE.sub(lambda m: chr(int(m.group(1), 8)), path)
++
++
++def parse_mountinfo(text):
++    """Return a list of (mount_point, fstype) from /proc/self/mountinfo content."""
++    mounts = []
++    for line in text.splitlines():
++        if " - " not in line:
++            continue
++        pre, post = line.split(" - ", 1)
++        pre_fields = pre.split()
++        post_fields = post.split()
++        if len(pre_fields) < 5 or not post_fields:
++            continue
++        mounts.append((_unescape_mountinfo(pre_fields[4]), post_fields[0]))
++    return mounts
++
++
++def mount_for_path(path, mounts):
++    """The (mount_point, fstype) that `path` lives on: the longest mount point prefixing it."""
++    path = os.path.normpath(path)
++    best = None
++    for mount_point, fstype in mounts:
++        mp = os.path.normpath(mount_point)
++        if path == mp or path.startswith(mp.rstrip("/") + "/") or mp == "/":
++            if best is None or len(mp) > len(os.path.normpath(best[0])):
++                best = (mount_point, fstype)
++    return best
++
++
++def in_container():
++    return any(os.path.exists(m) for m in CONTAINER_MARKERS)
++
++
++def datastore_storage_warning(datastore_path, mountinfo_text=None, inside_container=None):
++    """
++    Return a human readable warning if `datastore_path` is stored in the container's
++    throw-away root filesystem, otherwise None.
++
++    mountinfo_text / inside_container exist so the logic can be unit tested.
++    """
++    if strtobool(os.getenv("DISABLE_DATASTORE_STORAGE_CHECK", "false")):
++        return None
++
++    if inside_container is None:
++        inside_container = in_container()
++    if not inside_container:
++        return None
++
++    if mountinfo_text is None:
++        try:
++            with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
++                mountinfo_text = f.read()
++        except OSError:
++            return None
++
++    mount = mount_for_path(os.path.realpath(datastore_path), parse_mountinfo(mountinfo_text))
++    if not mount:
++        return None
++
++    mount_point, fstype = mount
++    if os.path.normpath(mount_point) == "/" and fstype in EPHEMERAL_ROOT_FSTYPES:
++        return (
++            f"The datastore '{datastore_path}' is not on a volume, it is inside the container's "
++            f"temporary filesystem. All watches and settings will be lost when this container is "
++            f"re-created (image update, 'docker compose up', redeploy). "
++            f"Mount a volume, for example: -v changedetection-data:{datastore_path}"
++        )
++    return None
+diff --git a/changedetectionio/flask_app.py b/changedetectionio/flask_app.py
+index 8d65af3a..7b5abca5 100644
+--- a/changedetectionio/flask_app.py
++++ b/changedetectionio/flask_app.py
+@@ -858,6 +858,11 @@ def changedetection_app(config=None, datastore_o=None):
+         available_languages=available_languages,
+     )
+ 
++    @app.context_processor
++    def inject_datastore_storage_warning():
++        # Set in main() when the datastore is not on a volume (would be lost on container re-create)
++        return dict(datastore_storage_warning=(config or {}).get('datastore_storage_warning'))
++
+     @app.context_processor
+     def inject_llm_features_disabled():
+         from changedetectionio.llm.evaluator import is_llm_features_disabled
+diff --git a/changedetectionio/templates/base.html b/changedetectionio/templates/base.html
+index cb95fb24..6eaa52ad 100644
+--- a/changedetectionio/templates/base.html
++++ b/changedetectionio/templates/base.html
+@@ -237,6 +237,15 @@
+             {% if header %}
+               <header><h3>{{ header }}</h3></header>
+             {% endif %}
++            {% if datastore_storage_warning %}
++              <ul class="messages" id="datastore-storage-warning">
++                <li class="error">
++                  <strong>{{ _('Data loss risk:') }}</strong>
++                  {{ _('The datastore is not on a persistent volume. All watches and settings will be lost when this container is re-created (image update, redeploy).') }}
++                  {{ _('Mount a volume at') }} <code>{{ config.get('datastore_path') or '/datastore' }}</code>.
++                </li>
++              </ul>
++            {% endif %}
+             {% with messages = get_flashed_messages(with_categories = true) %}
+             {% if messages %}
+               <ul class="messages">
+diff --git a/changedetectionio/tests/unit/test_datastore_storage_check.py b/changedetectionio/tests/unit/test_datastore_storage_check.py
+new file mode 100644
+index 00000000..299a46b4
+--- /dev/null
++++ b/changedetectionio/tests/unit/test_datastore_storage_check.py
+@@ -0,0 +1,73 @@
++"""
++Unit tests for changedetectionio.datastore_checks
++
++Run: pytest changedetectionio/tests/unit/test_datastore_storage_check.py
++"""
++import pytest
++
++from changedetectionio.datastore_checks import (
++    datastore_storage_warning,
++    mount_for_path,
++    parse_mountinfo,
++)
++
++# Container started WITHOUT a volume: /datastore only exists in the overlay root
++MOUNTINFO_NO_VOLUME = """\
++1523 1402 0:310 / / rw,relatime master:612 - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/A:/var/lib/docker/overlay2/l/B,upperdir=/var/lib/docker/overlay2/x/diff,workdir=/var/lib/docker/overlay2/x/work
++1524 1523 0:313 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
++1525 1523 0:314 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
++1531 1523 254:1 /var/lib/docker/containers/abc/resolv.conf /etc/resolv.conf rw,relatime - ext4 /dev/vda1 rw
++1532 1523 254:1 /var/lib/docker/containers/abc/hostname /etc/hostname rw,relatime - ext4 /dev/vda1 rw
++"""
++
++# Same container WITH `-v changedetection-data:/datastore` (named volume)
++MOUNTINFO_NAMED_VOLUME = MOUNTINFO_NO_VOLUME + (
++    "1533 1523 254:1 /var/lib/docker/volumes/changedetection-data/_data /datastore rw,relatime master:1 - ext4 /dev/vda1 rw\n"
++)
++
++# Bind mount with a space in the host path is escaped as \040, target is a sub-path
++MOUNTINFO_BIND_SUBDIR = MOUNTINFO_NO_VOLUME + (
++    "1534 1523 254:1 /srv/my\\040data /data rw,relatime - ext4 /dev/vda1 rw\n"
++)
++
++
++def test_parse_mountinfo():
++    mounts = parse_mountinfo(MOUNTINFO_NAMED_VOLUME)
++    assert ("/", "overlay") in mounts
++    assert ("/datastore", "ext4") in mounts
++
++
++def test_mount_for_path_longest_prefix_wins():
++    mounts = parse_mountinfo(MOUNTINFO_NAMED_VOLUME)
++    assert mount_for_path("/datastore", mounts) == ("/datastore", "ext4")
++    assert mount_for_path("/datastore/abc/watch.json", mounts) == ("/datastore", "ext4")
++    # A sibling directory with a shared prefix must NOT match /datastore
++    assert mount_for_path("/datastore2", mounts) == ("/", "overlay")
++
++
++def test_warns_when_datastore_is_in_container_layer():
++    msg = datastore_storage_warning("/datastore", mountinfo_text=MOUNTINFO_NO_VOLUME, inside_container=True)
++    assert msg and "/datastore" in msg and "re-created" in msg
++
++
++def test_no_warning_with_named_volume():
++    assert datastore_storage_warning("/datastore", mountinfo_text=MOUNTINFO_NAMED_VOLUME, inside_container=True) is None
++
++
++def test_no_warning_for_subdir_of_bind_mount():
++    assert datastore_storage_warning("/data/changedetection", mountinfo_text=MOUNTINFO_BIND_SUBDIR, inside_container=True) is None
++
++
++def test_no_warning_outside_a_container():
++    # pip installs on a normal host write to a real disk, nothing to warn about
++    assert datastore_storage_warning("/datastore", mountinfo_text=MOUNTINFO_NO_VOLUME, inside_container=False) is None
++
++
++def test_can_be_disabled(monkeypatch):
++    monkeypatch.setenv("DISABLE_DATASTORE_STORAGE_CHECK", "true")
++    assert datastore_storage_warning("/datastore", mountinfo_text=MOUNTINFO_NO_VOLUME, inside_container=True) is None
++
++
++@pytest.mark.parametrize("bad", ["", "garbage line without separator\n"])
++def test_unparseable_mountinfo_is_silent(bad):
++    assert datastore_storage_warning("/datastore", mountinfo_text=bad, inside_container=True) is None
+-- 
+2.43.0
+

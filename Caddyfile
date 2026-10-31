@@ -1,0 +1,21 @@
+{$DOMAIN} {
+	encode gzip
+
+	# Tell well-behaved crawlers to stay out entirely
+	handle /robots.txt {
+		respond "User-agent: *
+Disallow: /
+" 200
+	}
+
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Strict-Transport-Security "max-age=31536000"
+	}
+
+	reverse_proxy changedetection:5000 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

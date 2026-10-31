@@ -1,0 +1,68 @@
+# Hardened changedetection.io for ersatzteil-store.ch
+#
+# Fixes three things that each make watches/fields "disappear":
+#   1. Version 0.55.8 deletes/changes data on plain GET links (a crawler wipes it).
+#      -> pinned to 0.60.10, where every state-changing action is POST + CSRF (GHSA-3v57-xv5m-v7m7).
+#   2. Instance was public with no password, so anyone (bots, people) could edit/delete.
+#      -> SALTED_PASS login (cannot be removed from the UI) + app only reachable through Caddy.
+#   3. Data must live on a named volume, never in the container's writable layer.
+#      -> changedetection-data volume + nightly backups to ./backups
+#
+# Usage:  cp .env.example .env  (fill it in)  &&  docker compose up -d
+
+services:
+  changedetection:
+    image: ghcr.io/dgtlmoon/changedetection.io:0.60.10   # pinned; upgrade on purpose, not by accident
+    container_name: changedetection
+    hostname: changedetection
+    restart: unless-stopped
+    environment:
+      - SALTED_PASS=${SALTED_PASS:?Set SALTED_PASS in .env (python3 scripts/make_salted_pass.py)}
+      - BASE_URL=https://${DOMAIN}
+      - USE_X_SETTINGS=1
+      - TZ=Europe/Zurich
+      - FORCE_FSYNC_DATA_IS_CRITICAL=true   # fsync each watch.json before rename (survives power loss)
+      - LOGGER_LEVEL=WARNING
+    volumes:
+      - changedetection-data:/datastore
+    expose:
+      - "5000"                         # not published on the host; only Caddy can reach it
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:5000/', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: changedetection-proxy
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - changedetection
+
+  backup:
+    image: alpine:3.20
+    container_name: changedetection-backup
+    restart: unless-stopped
+    volumes:
+      - changedetection-data:/datastore:ro
+      - ./backups:/backups
+    # Nightly tarball at 02:30, keep the last 14
+    command: >
+      sh -c 'echo "30 2 * * * tar czf /backups/datastore-$$(date +\%F).tgz -C /datastore . && ls -1t /backups/datastore-*.tgz | tail -n +15 | xargs -r rm -f" | crontab - && crond -f -l 8'
+
+volumes:
+  changedetection-data:
+    name: changedetection-data   # fixed name, so a different project dir/compose name can't create a fresh empty one
+  caddy-data:
+  caddy-config:
