@@ -132,6 +132,10 @@ docker compose up -d
 | `verify_persistence.sh` against 0.60.10 | create, re-create, kill -9: all pass |
 | Backup loop, migrate script (with a recording docker stand-in) | correct file names, retention 14, correct order |
 | `docker compose config` | valid |
+| Full stack via `docker compose up -d` (real images, Docker 29.8 / Compose 5.5) | all 3 containers up, app reports healthy |
+| `verify_persistence.sh` on the full stack, incl. crawler through Caddy HTTPS | create, re-create, kill -9, anonymous crawler: all pass |
+| `docker compose down` + `up -d` with a watch saved | watch and filters kept (named volume) |
+| Caddy | HTTPS works, `/` redirects to the login page, `robots.txt` disallows everything, `X-Robots-Tag` + HSTS sent |
+| Backup container | tarball written at start-up |
 
-Not run here: the actual Docker images and the Caddy container (my sandbox can't reach image registries).
-Please run `verify_persistence.sh` once after deploying.
+Tested locally with `DOMAIN=localhost`. On your server, run `verify_persistence.sh` once after deploying.
