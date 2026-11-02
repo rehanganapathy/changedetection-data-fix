@@ -76,6 +76,14 @@ From 0.60.2 on, all of these are POST + CSRF token.
 | Same data upgraded to 0.60.10 | nothing changes, all fields intact (destructive actions are POST + CSRF) |
 | 0.55.8 with a password | only sees the login page, nothing changes |
 
+**0.55.8, no password:** a crawler that only follows links requests the delete, pause and mute links:
+
+![0.55.8: the crawler follows the delete, pause and mute links](docs/img/before.png)
+
+**Result:** on 0.55.8 all 3 watches are gone (top). The same data upgraded to 0.60.10 keeps all 3, filters included (bottom):
+
+![0.55.8 loses every watch; 0.60.10 keeps everything](docs/img/after.png)
+
 `repro/crawler_repro.py` is a small (~80 line) crawler that only does GET requests on same-origin links.
 **Run it only against your own test instance.**
 
