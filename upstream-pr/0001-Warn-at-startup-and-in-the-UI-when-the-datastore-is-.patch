@@ -1,4 +1,4 @@
-From 8b6afe654140a5cad616b0395b34de4b5e69a23d Mon Sep 17 00:00:00 2001
+From 87ff87f91504cecc2625a37618d080da3fc5bb01 Mon Sep 17 00:00:00 2001
 From: Rehan Ganapathy <rehang1710@outlook.com>
 Date: Sat, 31 Oct 2026 17:44:47 +0000
 Subject: [PATCH] Warn at startup and in the UI when the datastore is not on a
@@ -13,6 +13,9 @@ settings randomly disappearing.
 Detect this on Linux by checking /proc/self/mountinfo: if the datastore lives
 on the container's overlay root, log a CRITICAL message at startup and show a
 banner in the UI. Opt out with DISABLE_DATASTORE_STORAGE_CHECK=true.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018qYNnEyN6pCfhgAjjvArHS
 ---
  changedetectionio/__init__.py                 |   7 ++
  changedetectionio/datastore_checks.py         | 102 ++++++++++++++++++

@@ -16,9 +16,26 @@ The data is not being lost by the storage layer. Version 0.55.8 writes every cha
    If the container was started without `-v …:/datastore`, all data lives in the container layer and is wiped on
    every re-create (image update, `docker compose up` with a new image, Portainer/Watchtower redeploy).
 
-Evidence from the live instance today: scheduling is globally **paused** and notifications globally **muted**,
-and the remaining watches are unrelated LinkedIn/Facebook URLs. That is exactly the end state my crawler
-reproduction leaves behind (see below).
+Evidence from the live instance on 31 Oct 2026 (before a login was added): scheduling was globally **paused**,
+notifications globally **muted**, and the only watches left were unrelated social-media profile URLs that someone
+outside the team had added. That is exactly the end state my crawler reproduction leaves behind (see below).
+
+## Confirm it on your server (1 minute)
+
+The container log records every request. If this is the cause, the deletions are in there:
+
+```bash
+docker logs <container-name> 2>&1 | grep -E 'GET /(delete\?|tags/delete|settings/(toggle-all|reset-api-key))|op=(pause|mute)'
+```
+
+Lines like `"GET /delete?uuid=… HTTP/1.1" 302` from IPs that are not yours confirm it. If you run a reverse proxy
+with access logs (nginx/Caddy), grep those too: they also show the bot's User-Agent.
+
+## Now that a login is set
+
+Good, that stops anonymous visitors and crawlers. Upgrading is still needed, because on 0.55.8 a logged-in
+browser can still be made to delete data by any page that embeds e.g. `<img src="https://…/delete?uuid=…">`
+(cross-site request forgery). 0.60.1+ requires POST + CSRF token for all of these.
 
 ## Reproduction (local, takes ~30 s)
 
