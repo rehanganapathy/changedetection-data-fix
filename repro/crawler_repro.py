@@ -31,7 +31,19 @@ UUID_RE = re.compile(r"/edit/([0-9a-f-]{36})")
 def list_watches(base):
     # Read the watch list from the dashboard itself (no API key needed,
     # because the crawl may rotate the API key via GET /settings/reset-api-key).
-    return sorted(set(UUID_RE.findall(get(base + "/"))))
+    # Returns None when the dashboard is behind a login, so the crawler can't see it.
+    req = urllib.request.Request(base + "/", headers={"User-Agent": "generic-crawler/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        if "/login" in r.geturl():
+            return None
+        return sorted(set(UUID_RE.findall(r.read().decode("utf-8", "replace"))))
+
+
+def show_count(label, watches):
+    if watches is None:
+        print(f"Watches {label} crawl: not visible (blocked by login)")
+    else:
+        print(f"Watches {label} crawl: {len(watches)}")
 
 
 def crawl(base, max_pages):
@@ -64,18 +76,22 @@ def main():
     base = a.base.rstrip("/")
 
     before = list_watches(base)
-    print(f"Watches BEFORE crawl: {len(before)}")
+    show_count("BEFORE", before)
 
     seen, hits = crawl(base, a.max_pages)
-    print(f"\nCrawler fetched {len(seen)} URLs with plain GET. State-changing URLs it hit:")
+    print(f"\nCrawler fetched {len(seen)} URLs with plain GET.")
+    print("Destructive links it requested (whether they did anything is shown below):")
     for h in hits:
         print(f"  GET {h}")
 
     after = list_watches(base)
-    print(f"\nWatches AFTER crawl: {len(after)}")
-    lost = set(before) - set(after)
+    print()
+    show_count("AFTER", after)
+    lost = set(before or []) - set(after or [])
     for u in sorted(lost):
         print(f"  LOST watch {u}")
+    if before is not None and after is not None and not lost:
+        print("  No watches lost.")
     sys.exit(1 if lost else 0)
 
 
