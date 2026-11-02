@@ -1,6 +1,26 @@
 # changedetection.io: why watches and fields disappear, and the fix
 
-Ersatzteilstore skill test, by Rehan Ganapathy.
+Ersatzteilstore skill test, by Rehan Ganapathy. Option 1: find the cause and fix it.
+
+## How to test it
+
+| Option | What you see | Needs |
+|---|---|---|
+| `./repro/run_local_demo.sh` | the bug on 0.55.8 (all watches deleted), then the same data on 0.60.10 / with a password (nothing lost) | Python 3, internet for `pip`, ~1 min |
+| `docker compose up -d`, then `./scripts/verify_persistence.sh` | the fixed stack keeps a watch's fields through container re-create and `kill -9` | Docker, a test server or laptop |
+| Live demo link (if included in my message) | the fixed stack running: add fields, ask me to restart it, they stay | a browser |
+
+## How I approached it
+
+1. Looked at the link in the task: `ersatzteil-store.ch` opens the changedetection.io admin itself (v0.55.8, no
+   login at the time), already showing "scheduling paused" and "notifications muted". I only loaded the start
+   page and never clicked anything there.
+2. Ruled out storage first: installed the same version, added and edited watches via the UI form and the API,
+   killed the process with `kill -9`. Everything survived, so the data is saved. Something must be removing it.
+3. Read the 0.55.8 routes: delete, pause, mute, delete group and reset API key are plain GET links.
+4. Reproduced it with a small crawler that only follows links: every watch deleted, everything paused and
+   muted. The same end state as the live instance.
+5. Checked upstream: fixed in 0.60.2. Built and tested a hardened deployment around the current release.
 
 ## TL;DR
 
@@ -13,6 +33,8 @@ It is not a saving bug. Version 0.55.8 writes every change to disk immediately, 
    `/delete?uuid=…`, `/tags/delete/…`, `/settings/toggle-all-paused`, `/settings/toggle-all-muted`,
    `/settings/reset-api-key`, `/?op=pause&uuid=…`. Any crawler, SEO bot, link-preview bot or visitor that follows
    links triggers them. Bots don't run JavaScript, so the popup never appears. No hacking needed.
+   If the admin link was shared more widely (for example in this task), every person clicking around it, or an
+   AI agent browsing it, can trigger them too.
 3. **Possible second cause (check on the server):** the official image has no `VOLUME` for `/datastore`.
    If the container was started without `-v …:/datastore`, all data lives in the container layer and is wiped on
    every re-create (image update, `docker compose up` with a new image, Portainer/Watchtower redeploy).
