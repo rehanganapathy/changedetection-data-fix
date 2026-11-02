@@ -1,13 +1,6 @@
 {$DOMAIN} {
 	encode gzip
 
-	# Tell well-behaved crawlers to stay out entirely
-	handle /robots.txt {
-		respond "User-agent: *
-Disallow: /
-" 200
-	}
-
 	header {
 		X-Robots-Tag "noindex, nofollow"
 		X-Frame-Options "DENY"
@@ -15,7 +8,17 @@ Disallow: /
 		Strict-Transport-Security "max-age=31536000"
 	}
 
-	reverse_proxy changedetection:5000 {
-		header_up X-Forwarded-Proto {scheme}
+	# Tell well-behaved crawlers to stay out entirely
+	handle /robots.txt {
+		respond <<TXT
+			User-agent: *
+			Disallow: /
+			TXT 200
+	}
+
+	# Everything else goes to changedetection.io
+	# (Caddy already sends X-Forwarded-For/-Proto/-Host to the upstream by default)
+	handle {
+		reverse_proxy changedetection:5000
 	}
 }

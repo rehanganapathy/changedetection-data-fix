@@ -4,7 +4,7 @@
 
 | Finding | Upstream status | Action |
 |---|---|---|
-| Destructive actions on GET links (a crawler wipes data) | **Already fixed** in 0.60.1 (advisory GHSA-3v57-xv5m-v7m7, commit `89a41c0d`, Aug 2026). | **No PR.** But comment on discussion #4133 (below): a user on 0.55.1 behind Caddy reported exactly this symptom and it was never explained. |
+| Destructive actions on GET links (a crawler wipes data) | **Already fixed** by commit `89a41c0d` ("GHSA-3v57-xv5m-v7m7 - Multiple front-end endpoints lacking CSRF protection", Aug 2026), first released in 0.60.2 (Sep 2026). | **No PR.** But comment on discussion #4133 (below): a user on 0.55.1 behind Caddy reported exactly this symptom and it was never explained. |
 | Datastore silently in the container layer when no volume is mounted | Not handled anywhere (checked master `7a925eb5`). | **PR** (patch in `upstream-pr/`). |
 
 ## 1. Comment on discussion #4133 (do this first, 5 minutes)
@@ -17,17 +17,17 @@ Suggested comment:
 ```markdown
 I hit the same symptom on a self-hosted 0.55.8 and found the cause there; it may explain this one too.
 
-Before 0.60.1, several destructive actions were plain GET links guarded only by a JS confirm:
+Before 0.60.2, several destructive actions were plain GET links guarded only by a JS confirm:
 `/delete?uuid=…`, `/tags/delete/<uuid>`, `/settings/toggle-all-paused`, `/settings/toggle-all-muted`,
 `/settings/reset-api-key`, `/?op=pause|mute`. If the instance is reachable without a password, any
-crawler or link-preview bot that follows links deletes every watch it sees. A 60-line GET-only crawler
+crawler or link-preview bot that follows links deletes every watch it sees. A small GET-only crawler
 reproduces it locally on 0.55.8 (all watches deleted, everything paused and muted). On 0.60.x the same
-crawl changes nothing, since these are now POST + CSRF (GHSA-3v57-xv5m-v7m7).
+crawl changes nothing, since these are now POST + CSRF (commit 89a41c0d).
 
 @oms0401 a quick way to check: the container log records the requests, so
 `docker logs <container> 2>&1 | grep -E 'GET /(delete\?|tags/delete)'`
 (or the same grep on Caddy's access log, which also shows the User-Agent) should show the deletions if
-this is it. Fix: upgrade to >= 0.60.1 and set a password (or `SALTED_PASS`).
+this is it. Fix: upgrade to >= 0.60.2 and set a password (or `SALTED_PASS`).
 ```
 
 Before posting: run `./repro/run_local_demo.sh` yourself so you've seen it with your own eyes, and

@@ -57,9 +57,17 @@ services:
     volumes:
       - changedetection-data:/datastore:ro
       - ./backups:/backups
-    # Nightly tarball at 02:30, keep the last 14
-    command: >
-      sh -c 'echo "30 2 * * * tar czf /backups/datastore-$$(date +\%F).tgz -C /datastore . && ls -1t /backups/datastore-*.tgz | tail -n +15 | xargs -r rm -f" | crontab - && crond -f -l 8'
+    # One tarball at start-up and then every 24 h, keep the newest 14
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          f=/backups/datastore-$$(date +%Y-%m-%d_%H%M).tgz
+          tar czf "$$f" -C /datastore . && echo "backup written: $$f"
+          ls -1t /backups/datastore-*.tgz | tail -n +15 | xargs -r rm -f
+          sleep 86400
+        done
 
 volumes:
   changedetection-data:
